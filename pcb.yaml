@@ -1,0 +1,17 @@
+# Ultralytics data config for PCB Defect dataset (YOLO format)
+# Update 'path' only if you know your folder layout is different.
+# The training script overwrites these paths after it splits/arranges the data.
+
+path: .
+train: data/pcb/splits/images/train
+val: data/pcb/splits/images/val
+test: data/pcb/splits/images/test
+
+# 6 classes (order must match your label indices)
+names:
+  0: missing_hole
+  1: mouse_bite
+  2: open_circuit
+  3: short
+  4: spur
+  5: spurious_copper

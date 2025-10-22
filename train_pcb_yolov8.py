@@ -1,0 +1,213 @@
+import argparse
+import os
+import shutil
+import subprocess
+from pathlib import Path
+from typing import Tuple, List
+from glob import glob
+
+from sklearn.model_selection import train_test_split
+
+# Ultralytics (installed via pip)
+from ultralytics import YOLO
+
+def run(cmd: List[str]):
+    print(f"[RUN] {' '.join(cmd)}")
+    subprocess.run(cmd, check=True)
+
+def kaggle_download(dataset: str, out_dir: Path):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    # Use Kaggle CLI: kaggle datasets download -d <dataset> -p <out_dir> --unzip
+    run(["kaggle", "datasets", "download", "-d", dataset, "-p", str(out_dir)])
+    # Find the zip file
+    zips = list(out_dir.glob("*.zip"))
+    if not zips:
+        # Kaggle sometimes downloads with dataset name as zip
+        zips = list(out_dir.rglob("*.zip"))
+    assert zips, "No zip archive found after Kaggle download."
+    # Unzip all (some datasets have multiple archives)
+    for z in zips:
+        run(["unzip", "-o", str(z), "-d", str(out_dir)])
+    # Optional: delete zips to save space
+    for z in zips:
+        z.unlink(missing_ok=True)
+
+def detect_image_label_roots(raw_root: Path) -> Tuple[Path, Path]:
+    """
+    Try to locate images/ and labels/ folders with YOLO txt annotations.
+    If not found at the top level, search recursively.
+    """
+    candidates = []
+    for p in raw_root.rglob("*"):
+        if p.is_dir() and p.name.lower() in ("images", "image"):
+            # Check for corresponding labels sibling
+            sib = p.parent / "labels"
+            if sib.exists() and sib.is_dir():
+                candidates.append((p, sib))
+    if candidates:
+        # Prefer the shallowest path (shortest)
+        candidates.sort(key=lambda t: len(str(t[0])))
+        return candidates[0]
+    # Fallback: search for any *.txt that look like YOLO labels
+    txts = list(raw_root.rglob("labels/**/*.txt"))
+    if txts:
+        # Guess images directory from two levels up
+        labels_root = Path(os.path.commonpath([str(t.parent) for t in txts]))
+        images_root = labels_root.parent / "images"
+        if images_root.exists():
+            return images_root, labels_root
+    raise FileNotFoundError("Could not find YOLO-style images/ and labels/ directories under " + str(raw_root))
+
+def build_split_structure(images_root: Path, labels_root: Path, out_root: Path, test_size=0.1, val_size=0.1, seed=42, copy=False):
+    """
+    Create data/pcb/splits/{images,labels}/{train,val,test} and fill with symlinks or copies.
+    Assumes image file names match label file names (except extension).
+    """
+    out_img = out_root / "images"
+    out_lab = out_root / "labels"
+    for split in ["train", "val", "test"]:
+        (out_img / split).mkdir(parents=True, exist_ok=True)
+        (out_lab / split).mkdir(parents=True, exist_ok=True)
+
+    # Collect all images and match to labels
+    exts = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.tif", "*.tiff")
+    imgs = []
+    for e in exts:
+        imgs += glob(str(images_root / "**" / e), recursive=True)
+    imgs = sorted(set(imgs))
+    if not imgs:
+        raise RuntimeError(f"No images found under {images_root}")
+    # Match labels
+    pairs = []
+    for im in imgs:
+        stem = Path(im).stem
+        # Allow nested structure under labels_root
+        # Search for a label txt with same stem anywhere in labels subtree
+        candidates = list(labels_root.rglob(f"{stem}.txt"))
+        if candidates:
+            pairs.append((Path(im), candidates[0]))
+    if not pairs:
+        raise RuntimeError("No image-label pairs found. Check your dataset structure.")
+
+    # First split train+rest, then split rest into val/test
+    img_paths = [p[0] for p in pairs]
+    lab_paths = [p[1] for p in pairs]
+
+    img_train, img_rest, lab_train, lab_rest = train_test_split(
+        img_paths, lab_paths, test_size=(val_size + test_size), random_state=seed, shuffle=True
+    )
+    rel_val = val_size / (val_size + test_size) if (val_size + test_size) > 0 else 0.0
+    img_val, img_test, lab_val, lab_test = train_test_split(
+        img_rest, lab_rest, test_size=(1 - rel_val), random_state=seed, shuffle=True
+    )
+
+    def place(files, dest_dir):
+        for src in files:
+            dst = dest_dir / src.name
+            if copy:
+                shutil.copy2(src, dst)
+            else:
+                # Try to symlink; if on Windows without perms, fallback to copy
+                try:
+                    if dst.exists():
+                        dst.unlink()
+                    dst.symlink_to(src)
+                except Exception:
+                    shutil.copy2(src, dst)
+
+    place(img_train, out_img / "train")
+    place(lab_train, out_lab / "train")
+    place(img_val, out_img / "val")
+    place(lab_val, out_lab / "val")
+    place(img_test, out_img / "test")
+    place(lab_test, out_lab / "test")
+
+    return out_img, out_lab
+
+def write_yaml(pcb_yaml: Path, splits_root: Path):
+    text = f"""# Auto-generated by train_pcb_yolov8.py
+path: .
+train: {splits_root / 'images/train'}
+val: {splits_root / 'images/val'}
+test: {splits_root / 'images/test'}
+
+names:
+  0: missing_hole
+  1: mouse_bite
+  2: open_circuit
+  3: short
+  4: spur
+  5: spurious_copper
+"""
+    pcb_yaml.write_text(text)
+    print(f"[INFO] Wrote data yaml to {pcb_yaml}")
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dataset", type=str, default="norbertelter/pcb-defect-dataset", help="Kaggle dataset slug")
+    parser.add_argument("--data_root", type=str, default="data/raw/pcb-defect-dataset", help="Where to download/extract the dataset")
+    parser.add_argument("--splits_root", type=str, default="data/pcb/splits", help="Where to place YOLO splits")
+    parser.add_argument("--model", type=str, default="yolov8n.pt", help="YOLOv8 model checkpoint")
+    parser.add_argument("--imgsz", type=int, default=640)
+    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--batch", type=int, default=16)
+    parser.add_argument("--device", type=str, default="auto")
+    parser.add_argument("--conf", type=float, default=0.001, help="Confidence threshold during validation/prediction")
+    parser.add_argument("--copy", action="store_true", help="Copy files instead of symlinking")
+    parser.add_argument("--seed", type=int, default=42)
+    args = parser.parse_args()
+
+    project_root = Path(".")
+    raw_root = project_root / args.data_root
+    splits_root = project_root / args.splits_root
+    pcb_yaml = project_root / "pcb.yaml"
+
+    # 1) Download dataset from Kaggle (skips if folder not empty)
+    if not any(raw_root.iterdir()) if raw_root.exists() else True:
+        print("[INFO] Downloading Kaggle dataset...")
+        kaggle_download(args.dataset, raw_root)
+    else:
+        print("[INFO] Raw data seems to exist, skipping download.")
+
+    # 2) Detect images/labels roots
+    images_root, labels_root = detect_image_label_roots(raw_root)
+    print(f"[INFO] Found images at: {images_root}")
+    print(f"[INFO] Found labels at: {labels_root}")
+
+    # 3) Build splits (train/val/test)
+    out_img, out_lab = build_split_structure(images_root, labels_root, splits_root, copy=args.copy, seed=args.seed)
+    print(f"[INFO] Built split structure under: {splits_root}")
+
+    # 4) Write YAML
+    write_yaml(pcb_yaml, splits_root)
+
+    # 5) Train
+    model = YOLO(args.model)
+    results = model.train(
+        data=str(pcb_yaml),
+        imgsz=args.imgsz,
+        epochs=args.epochs,
+        batch=args.batch,
+        device=args.device,
+        project="runs/detect",
+        name=f"pcb_{Path(args.model).stem}",
+        pretrained=True
+    )
+    print("[INFO] Training complete. Metrics:")
+    print(results)
+
+    # 6) Validate (optional, but gives per-class metrics)
+    val_res = model.val(data=str(pcb_yaml), imgsz=args.imgsz, conf=args.conf, device=args.device)
+    print("[INFO] Validation complete. mAP metrics printed above.")
+
+    # 7) Export to ONNX (others available: 'engine','tflite','openvino', etc.)
+    model.export(format="onnx", dynamic=False)
+
+    # 8) Example inference on a few train images (replace with your own)
+    sample_images = list((splits_root / "images/val").glob("*.*"))[:4]
+    if sample_images:
+        pred = model.predict(source=[str(p) for p in sample_images], imgsz=args.imgsz, conf=args.conf, save=True)
+        print("[INFO] Prediction saved to:", pred)
+
+if __name__ == "__main__":
+    main()
