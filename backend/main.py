@@ -1,27 +1,43 @@
 # main.py
 from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional, Tuple
 from ultralytics import YOLO
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import io
 import torch
+import numpy as np
+from pathlib import Path
 
 app = FastAPI(
-    title="YOLOv8 FastAPI Service",
-    description="Simple object detection service powered by YOLOv8",
+    title="ChipSight YOLOv8 Service",
+    description="PCB defect detection service with severity scoring",
     version="1.0.0",
 )
 
 # ---- Load model once at startup ----
-# Use "yolov8n.pt" for a pretrained model, or your own path: "runs/detect/train/weights/best.pt"
-MODEL_PATH = "yolov8n.pt"
+# Try to use trained model, fallback to pretrained
+MODEL_PATH = "models/best.pt" if Path("models/best.pt").exists() else "yolov8n.pt"
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model = YOLO(MODEL_PATH).to(device)
 
+# Defect type severity weights (higher = more critical)
+# These weights determine how critical each defect type is
+SEVERITY_WEIGHTS = {
+    "missing_hole": 1.5,
+    "mouse_bite": 1.2,
+    "open_circuit": 2.0,  # Most critical
+    "short": 2.0,  # Most critical
+    "spur": 1.0,
+    "spurious_copper": 1.1,
+}
 
-# ---- Response schema (optional but nice with OpenAPI docs) ----
+# Default weight for unknown classes
+DEFAULT_WEIGHT = 1.0
+
+
+# ---- Response schema ----
 class Detection(BaseModel):
     class_name: str
     confidence: float
@@ -29,19 +45,142 @@ class Detection(BaseModel):
     y1: float
     x2: float
     y2: float
+    severity_score: float
+    severity_level: str  # "Critical", "Moderate", "Minor"
 
 
 class PredictionResponse(BaseModel):
     detections: List[Detection]
+    annotated_image_base64: Optional[str] = None
+
+
+def calculate_severity(confidence: float, bbox_area: float, class_name: str) -> Tuple[float, str]:
+    """
+    Calculate severity score: confidence × bounding box area × defect-type-weight
+    Returns: (severity_score, severity_level)
+    """
+    weight = SEVERITY_WEIGHTS.get(class_name, DEFAULT_WEIGHT)
+    severity_score = confidence * bbox_area * weight
+    
+    # Determine severity level based on score thresholds
+    if severity_score > 0.5:
+        level = "Critical"
+    elif severity_score > 0.2:
+        level = "Moderate"
+    else:
+        level = "Minor"
+    
+    return severity_score, level
+
+
+def get_severity_color(severity_level: str) -> str:
+    """Get color for severity level"""
+    color_map = {
+        "Critical": "#FF0000",  # Red
+        "Moderate": "#FFA500",  # Yellow/Orange
+        "Minor": "#00FF00",     # Green
+    }
+    return color_map.get(severity_level, "#FFFFFF")
+
+
+def draw_annotations(img: Image.Image, detections: List[Detection]) -> Image.Image:
+    """Draw bounding boxes and labels on image"""
+    draw = ImageDraw.Draw(img)
+    
+    # Try to load a font, fallback to default if not available
+    font = None
+    font_small = None
+    
+    # Try multiple font paths for cross-platform compatibility
+    font_paths = [
+        "/System/Library/Fonts/Helvetica.ttc",  # macOS
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Linux
+        "C:/Windows/Fonts/arial.ttf",  # Windows
+    ]
+    
+    for font_path in font_paths:
+        try:
+            font = ImageFont.truetype(font_path, 16)
+            font_small = ImageFont.truetype(font_path, 12)
+            break
+        except:
+            continue
+    
+    # Fallback to default font
+    if font is None:
+        try:
+            font = ImageFont.load_default()
+            font_small = ImageFont.load_default()
+        except:
+            pass
+    
+    for det in detections:
+        x1, y1, x2, y2 = det.x1, det.y1, det.x2, det.y2
+        color = get_severity_color(det.severity_level)
+        
+        # Draw bounding box
+        draw.rectangle([x1, y1, x2, y2], outline=color, width=3)
+        
+        # Prepare label text
+        class_name = det.class_name.replace("_", " ").title()
+        conf_percent = int(det.confidence * 100)
+        label = f"{class_name} {conf_percent}%"
+        
+        # Draw label background
+        if font:
+            bbox = draw.textbbox((0, 0), label, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+        else:
+            text_width = len(label) * 8
+            text_height = 16
+        
+        label_y = max(0, y1 - text_height - 5)
+        draw.rectangle(
+            [x1, label_y, x1 + text_width + 10, label_y + text_height + 5],
+            fill=color,
+            outline=color
+        )
+        
+        # Draw label text
+        draw.text(
+            (x1 + 5, label_y + 2),
+            label,
+            fill="white",
+            font=font
+        )
+        
+        # Draw severity level
+        severity_text = det.severity_level
+        if font_small:
+            severity_bbox = draw.textbbox((0, 0), severity_text, font=font_small)
+            severity_width = severity_bbox[2] - severity_bbox[0]
+        else:
+            severity_width = len(severity_text) * 6
+        
+        severity_y = y2 + 5
+        draw.rectangle(
+            [x1, severity_y, x1 + severity_width + 10, severity_y + 18],
+            fill=color,
+            outline=color
+        )
+        draw.text(
+            (x1 + 5, severity_y + 2),
+            severity_text,
+            fill="white",
+            font=font_small
+        )
+    
+    return img
 
 
 @app.get("/health")
 async def healthcheck():
-    return {"status": "ok"}
+    return {"status": "ok", "model": MODEL_PATH, "device": device}
 
 
 @app.post("/predict", response_model=PredictionResponse)
-async def predict(file: UploadFile = File(...)):
+async def predict(file: UploadFile = File(...), return_image: bool = True):
     # Basic validation
     if file.content_type not in {"image/jpeg", "image/png", "image/jpg"}:
         raise HTTPException(status_code=400, detail="Invalid image type")
@@ -51,38 +190,62 @@ async def predict(file: UploadFile = File(...)):
 
     try:
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        img_width, img_height = img.size
+        total_area = img_width * img_height
     except Exception:
         raise HTTPException(status_code=400, detail="Corrupted or unsupported image file")
 
     # Run inference
-    # `model` can take a PIL image directly
     results = model(img, verbose=False)
-
-    # YOLOv8 returns a Results list; take first item
     result = results[0]
 
     detections: List[Detection] = []
+    annotated_img = img.copy()
 
-    boxes = result.boxes  # Boxes object
+    boxes = result.boxes
     if boxes is not None and len(boxes) > 0:
-        # boxes.xyxy: (N, 4), boxes.conf: (N,), boxes.cls: (N,)
         xyxy = boxes.xyxy.cpu().numpy()
         conf = boxes.conf.cpu().numpy()
         cls = boxes.cls.cpu().numpy()
-
-        names = model.names  # class id -> name
+        names = model.names
 
         for i in range(len(boxes)):
             x1, y1, x2, y2 = xyxy[i].tolist()
+            class_name = str(names[int(cls[i])])
+            confidence = float(conf[i])
+            
+            # Calculate bounding box area (normalized by image size)
+            bbox_area = ((x2 - x1) * (y2 - y1)) / total_area
+            
+            # Calculate severity
+            severity_score, severity_level = calculate_severity(confidence, bbox_area, class_name)
+            
             detections.append(
                 Detection(
-                    class_name=str(names[int(cls[i])]),
-                    confidence=float(conf[i]),
+                    class_name=class_name,
+                    confidence=confidence,
                     x1=float(x1),
                     y1=float(y1),
                     x2=float(x2),
                     y2=float(y2),
+                    severity_score=severity_score,
+                    severity_level=severity_level,
                 )
             )
+        
+        # Draw annotations on image
+        if return_image:
+            annotated_img = draw_annotations(annotated_img, detections)
+    
+    # Convert annotated image to base64
+    annotated_image_base64 = None
+    if return_image:
+        buffered = io.BytesIO()
+        annotated_img.save(buffered, format="PNG")
+        import base64
+        annotated_image_base64 = base64.b64encode(buffered.getvalue()).decode()
 
-    return PredictionResponse(detections=detections)
+    return PredictionResponse(
+        detections=detections,
+        annotated_image_base64=annotated_image_base64
+    )

@@ -95,3 +95,59 @@ You generally won't need to edit it unless your paths change.
 - **Class order mismatch**: confirm your labels use the same class indices as `names` in `pcb.yaml`.
 
 Happy training!
+
+---
+
+## Web Application (ChipSight Frontend)
+
+The project includes a Streamlit frontend and FastAPI backend for interactive PCB defect detection with severity scoring.
+
+### Running the Application
+
+#### 1) Start the Backend API
+
+```bash
+cd backend
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8000
+```
+
+The API will be available at `http://localhost:8000`
+
+#### 2) Start the Frontend
+
+In a new terminal:
+
+```bash
+cd frontend
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+The frontend will open in your browser at `http://localhost:8501`
+
+### Features
+
+- **Drag-and-drop image upload** for PCB images
+- **Real-time defect detection** using your trained YOLOv8 model
+- **Severity scoring**: Each defect is scored based on:
+  - Confidence level
+  - Bounding box area (size of defect)
+  - Defect type weight (criticality)
+- **Visual annotations**: Bounding boxes with color-coded severity:
+  - 🔴 Red = Critical
+  - 🟡 Yellow/Orange = Moderate  
+  - 🟢 Green = Minor
+- **Tabbed interface**: Switch between original and annotated views
+- **Defect details panel**: Shows confidence, severity level, and score for each detection
+
+### Model Configuration
+
+The backend automatically uses `backend/models/best.pt` if available, otherwise falls back to the pretrained `yolov8n.pt`. Make sure your trained model is placed at `backend/models/best.pt` for best results.
+
+### API Endpoints
+
+- `GET /health` - Health check and model info
+- `POST /predict` - Upload image and get detections with annotated image
+  - Query parameter: `return_image=true` (default) to get base64-encoded annotated image
+  - Returns: JSON with detections (class, confidence, bbox, severity_score, severity_level) and annotated_image_base64
