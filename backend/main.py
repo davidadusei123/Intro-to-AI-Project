@@ -232,7 +232,7 @@ async def predict(file: UploadFile = File(...), return_image: bool = True):
                     severity_level=severity_level,
                 )
             )
-        
+
         # Draw annotations on image
         if return_image:
             annotated_img = draw_annotations(annotated_img, detections)
