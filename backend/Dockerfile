@@ -1,30 +1,43 @@
 FROM python:3.11-slim
 
-# Prevent Python from writing pyc files and buffer logs correctly
+# ------------------------
+# Environment
+# ------------------------
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
-
-# Ultralytics needs a writable config directory
 ENV YOLO_CONFIG_DIR=/tmp/Ultralytics
+
+# Cloud Run always sets PORT
+ENV PORT=8080
 
 WORKDIR /app
 
-# System dependencies required for PIL / OpenCV / Ultralytics
+# ------------------------
+# System dependencies (required by Ultralytics / OpenCV / PIL)
+# ------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
     fonts-dejavu-core \
   && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies first (layer caching)
+# ------------------------
+# Python dependencies
+# ------------------------
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend source (main.py, models/, etc.)
+# ------------------------
+# App source
+# ------------------------
 COPY . .
 
-# Cloud Run listens on $PORT (default 8080)
+# ------------------------
+# Cloud Run port
+# ------------------------
 EXPOSE 8080
 
+# ------------------------
 # Start FastAPI
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
+# ------------------------
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
