@@ -144,7 +144,7 @@ if uploaded_file is not None:
                 response = requests.post(
                     f"{BACKEND_URL}/predict?return_image=true",
                     files=files,
-                    timeout=30
+                    timeout=120
                 )
                 
                 if response.status_code == 200:
