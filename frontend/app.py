@@ -67,7 +67,7 @@ st.markdown("""
 # Backend API URL
 BACKEND_URL = st.sidebar.text_input(
     "Backend API URL",
-    value="https://intro-to-ai-project-3.onrender.com/",
+    value="https://chipsight-backend-837072298188.us-east1.run.app",
     help="URL of the FastAPI backend service"
 )
 
