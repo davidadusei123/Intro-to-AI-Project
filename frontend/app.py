@@ -67,7 +67,7 @@ st.markdown("""
 # Backend API URL
 BACKEND_URL = st.sidebar.text_input(
     "Backend API URL",
-    value="http://localhost:8000",
+    value="https://intro-to-ai-project-3.onrender.com/",
     help="URL of the FastAPI backend service"
 )
 
