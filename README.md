@@ -1,3 +1,23 @@
+### Running the Application
+
+HERES HOW TO RUN OUR APP
+
+This is the link to the streamlit interface
+https://davidadusei123-intro-to-ai-project-frontendapp-tzqxof.streamlit.app/
+
+The PCB Short image and PCB mouse bite images are included, test the solution with these images
+
+You can use the provided test samples in the report submission portal for easy access or download PCB images from the kaggle dataset
+
+Backend running at this link (Do not need to interact with this, but just for information sake)
+https://chipsight-backend-837072298188.us-east1.run.app/
+
+
+
+
+
+
+
 # YOLOv8 on Kaggle **PCB Defect dataset** (norbertelter/pcb-defect-dataset)
 
 This starter kit trains a YOLOv8 model (Ultralytics) on the Kaggle PCB Defect dataset:
@@ -104,8 +124,19 @@ The project includes a Streamlit frontend and FastAPI backend for interactive PC
 
 ### Running the Application
 
-## Running on Deployed Link
+# Deployed link Instructions (Also at Top of readme)
 
+HERES HOW TO RUN OUR APP
+
+This is the link to the streamlit interface
+https://davidadusei123-intro-to-ai-project-frontendapp-tzqxof.streamlit.app/
+
+The PCB Short image and PCB mouse bite images are included, test the solution with these images
+
+You can use the provided test samples in the report submission portal for easy access or download PCB images from the kaggle dataset
+
+Backend running at this link (Do not need to interact with this, but just for information sake)
+https://chipsight-backend-837072298188.us-east1.run.app/
 
 ## Instructions below to run on local host
 
