@@ -104,6 +104,11 @@ The project includes a Streamlit frontend and FastAPI backend for interactive PC
 
 ### Running the Application
 
+## Running on Deployed Link
+
+
+## Instructions below to run on local host
+
 #### 1) Start the Backend API
 
 ```bash
