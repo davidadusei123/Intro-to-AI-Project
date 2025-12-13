@@ -13,7 +13,14 @@ Backend running at this link (Do not need to interact with this, but just for in
 https://chipsight-backend-837072298188.us-east1.run.app/
 
 
+## Accessing code
 
+Code is on David's github link
+https://github.com/davidadusei123/Intro-to-AI-Project
+
+if you want to run locally 
+
+git clone https://github.com/davidadusei123/Intro-to-AI-Project.git
 
 
 
